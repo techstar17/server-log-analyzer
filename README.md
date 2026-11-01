@@ -15,7 +15,7 @@ I built this project to practise Python, log analysis, automated testing, contin
 - Checks for missing columns, empty datasets, and invalid status codes.
 - Displays a clear error when an input file cannot be read.
 - Includes seven automated tests.
-- Runs tests through GitHub Actions on every push and pull request.
+- Runs Python tests and Docker checks through GitHub Actions on every push and pull request.
 - Runs locally with Python or inside a Docker container.
 
 ## Tools
@@ -106,7 +106,7 @@ Open the generated reports:
 start reports
 ```
 
-Rebuild the image after changing `analyzer.py` or `requirements.txt`:
+Rebuild the image after changing `analyzer.py`, `requirements.txt`, or the `Dockerfile`:
 
 ```bat
 docker build -t server-log-analyzer:1.0 .
@@ -171,18 +171,34 @@ All seven tests passed locally on Windows.
 
 ## Continuous integration
 
-The workflow in `.github/workflows/tests.yml` runs on GitHub Actions.
+The workflow in `.github/workflows/tests.yml` runs on GitHub Actions for every push and pull request. It can also be started manually from the Actions tab.
 
-For every push and pull request, it:
+The workflow contains two jobs.
+
+### Python tests
+
+The first job:
 
 1. Checks out the repository.
 2. Sets up Python 3.15 on a Linux runner.
 3. Installs dependencies from `requirements.txt`.
-4. Runs the automated tests.
+4. Runs the seven automated tests.
 
-The workflow can also be started manually from the Actions tab.
+### Docker build and report checks
 
-The first GitHub Actions run completed successfully. Docker was checked separately by building and running the image locally.
+After the Python tests pass, the second job:
+
+1. Checks out the repository.
+2. Builds the Docker image.
+3. Runs the analyzer with `second_logs.csv`.
+4. Checks that each report heading appears exactly once.
+5. Verifies the total requests, error counts, and error rate in the terminal output and saved summary.
+6. Checks the error rows and request counts in the generated CSV files.
+7. Checks that the chart file has a PNG signature.
+
+Both the Python tests and Docker checks passed on GitHub Actions.
+
+The Docker job builds and tests the image; it does not publish it to a container registry.
 
 [View workflow runs](https://github.com/techstar17/server-log-analyzer/actions)
 
@@ -195,7 +211,7 @@ The first GitHub Actions run completed successfully. Docker was checked separate
 
 A missing filename was also tested and produced a readable error message.
 
-The Docker container was run with `second_logs.csv` and produced the expected counts. After removing duplicated code, the terminal report appeared once.
+The Docker container was run locally with `second_logs.csv` and produced the expected counts. After removing duplicated code, the terminal report appeared once.
 
 ## Project files
 
@@ -209,7 +225,7 @@ The Docker container was run with `second_logs.csv` and produced the expected co
 | Dockerfile | Instructions for building the Docker image |
 | .dockerignore | Excludes unnecessary files from the Docker build context |
 | .gitignore | Excludes the virtual environment and generated files from Git |
-| .github/workflows/tests.yml | GitHub Actions test workflow |
+| .github/workflows/tests.yml | Python tests and Docker checks on GitHub Actions |
 | README.md | Setup and usage instructions |
 
 ## Current limits
@@ -225,4 +241,3 @@ The Docker container was run with `second_logs.csv` and produced the expected co
 
 - Support for raw web-server logs.
 - Requests and errors grouped by time.
-- Automated Docker build and run checks in GitHub Actions.
