@@ -1,4 +1,4 @@
-name: Python tests
+name: Python tests and Docker checks
 
 on:
   push:
@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   test:
+    name: Python tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -31,3 +32,93 @@ jobs:
 
       - name: Run automated tests
         run: python -m unittest -v
+
+  docker:
+    name: Docker build and report checks
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Download repository code
+        uses: actions/checkout@v7
+
+      - name: Build Docker image
+        run: docker build -t server-log-analyzer:ci .
+
+      - name: Run analyzer inside Docker
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+
+          docker run --rm \
+            --mount "type=bind,source=${GITHUB_WORKSPACE}/second_logs.csv,target=/data/input.csv,readonly" \
+            --mount "type=bind,source=${GITHUB_WORKSPACE}/reports,target=/app/reports" \
+            server-log-analyzer:ci /data/input.csv \
+            | tee docker-output.txt
+
+      - name: Check Docker output and saved reports
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import csv
+          from pathlib import Path
+
+          reports = Path("reports")
+          output = Path("docker-output.txt").read_text(encoding="utf-8")
+          summary = (reports / "summary.txt").read_text(encoding="utf-8")
+
+          for heading in (
+              "SERVER LOG REPORT",
+              "Requests per IP:",
+              "Requests that returned errors:",
+              "Reports saved in:",
+          ):
+              assert output.count(heading) == 1, (
+                  f"Expected heading exactly once: {heading}"
+              )
+
+          for expected in (
+              "Total requests: 10",
+              "Client errors (4xx): 1",
+              "Server errors (5xx): 1",
+              "Error rate: 20.0%",
+          ):
+              assert expected in output, f"Missing terminal result: {expected}"
+              assert expected in summary, f"Missing summary result: {expected}"
+
+          with (reports / "errors.csv").open(
+              encoding="utf-8", newline=""
+          ) as file:
+              errors = list(csv.DictReader(file))
+
+          assert len(errors) == 2, "Expected two error rows"
+          assert {
+              (row["path"], row["status"]) for row in errors
+          } == {
+              ("/missing", "404"),
+              ("/api/orders", "500"),
+          }, "Unexpected error rows"
+
+          with (reports / "requests_per_ip.csv").open(
+              encoding="utf-8", newline=""
+          ) as file:
+              counts = {
+                  row["ip"]: int(row["requests"])
+                  for row in csv.DictReader(file)
+              }
+
+          assert counts == {
+              "192.0.2.20": 4,
+              "192.0.2.21": 3,
+              "192.0.2.22": 3,
+          }, "Unexpected request counts"
+
+          chart = (reports / "status_chart.png").read_bytes()
+          assert chart.startswith(b"\x89PNG\r\n\x1a\n"), (
+              "Chart does not have a PNG signature"
+          )
+
+          print("Docker output and all four reports passed checks.")
+          PY
