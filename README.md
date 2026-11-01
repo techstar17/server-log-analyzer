@@ -2,7 +2,7 @@
 
 A Python command-line tool that reads server request data from a CSV file, calculates error rates, and saves reports and a chart.
 
-I built this project to practise Python, log analysis, automated testing, and continuous integration as part of my DevOps learning.
+I built this project to practise Python, log analysis, automated testing, continuous integration, and Docker as part of my DevOps learning.
 
 ## Features
 
@@ -16,6 +16,7 @@ I built this project to practise Python, log analysis, automated testing, and co
 - Displays a clear error when an input file cannot be read.
 - Includes seven automated tests.
 - Runs tests through GitHub Actions on every push and pull request.
+- Runs locally with Python or inside a Docker container.
 
 ## Tools
 
@@ -25,6 +26,7 @@ I built this project to practise Python, log analysis, automated testing, and co
 - unittest
 - Git and GitHub
 - GitHub Actions
+- Docker
 
 ## Setup on Windows
 
@@ -63,6 +65,53 @@ To analyze your own CSV file, provide its path:
 python analyzer.py "C:\path\to\your_logs.csv"
 ```
 
+## Run with Docker on Windows
+
+Start Docker Desktop with Linux containers enabled, then open Command Prompt in the project folder.
+
+The commands below use Windows Command Prompt syntax. Running the Docker image does not require activating the Python virtual environment.
+
+Build the image:
+
+```bat
+docker build -t server-log-analyzer:1.0 .
+```
+
+Create the output folder:
+
+```bat
+if not exist reports mkdir reports
+```
+
+Run the analyzer with the second sample dataset:
+
+```bat
+docker run --rm --mount "type=bind,source=%cd%\second_logs.csv,target=/data/input.csv,readonly" --mount "type=bind,source=%cd%\reports,target=/app/reports" server-log-analyzer:1.0 /data/input.csv
+```
+
+This command:
+
+- Mounts `second_logs.csv` as a read-only input file.
+- Saves generated reports in the local `reports` folder.
+- Removes the container after it finishes.
+- Keeps the reports available on your computer.
+
+The sample produces 10 requests, one client error, one server error, and a 20% error rate.
+
+To use the first sample, replace `second_logs.csv` with `access_logs.csv` in the command.
+
+Open the generated reports:
+
+```bat
+start reports
+```
+
+Rebuild the image after changing `analyzer.py` or `requirements.txt`:
+
+```bat
+docker build -t server-log-analyzer:1.0 .
+```
+
 ## Input format
 
 The CSV must contain these columns:
@@ -79,11 +128,13 @@ The included datasets are made-up examples, not production traffic.
 
 ## Output
 
-Results appear in the terminal. Files are also saved in the `reports` folder within the current working directory:
+Results appear in the terminal. Files are also saved in the `reports` folder within the current working directory.
+
+When using the Docker command above, `/app/reports` inside the container maps to the local `reports` folder.
 
 | File | Contents |
 |---|---|
-| summary.txt | Total requests, error counts, and error rate |
+| summary.txt | Input filename, total requests, error counts, and error rate |
 | errors.csv | Requests with 4xx or 5xx status codes |
 | requests_per_ip.csv | Request count for each IP |
 | status_chart.png | Bar chart of requests by status code |
@@ -98,7 +149,7 @@ start reports
 
 ## Automated tests
 
-Run all tests from the project folder:
+With the Python dependencies installed, run all tests from the project folder:
 
 ```bat
 python -m unittest -v
@@ -131,10 +182,9 @@ For every push and pull request, it:
 
 The workflow can also be started manually from the Actions tab.
 
-The first GitHub Actions run completed successfully.
+The first GitHub Actions run completed successfully. Docker was checked separately by building and running the image locally.
 
-View workflow runs:
-https://github.com/techstar17/server-log-analyzer/actions
+[View workflow runs](https://github.com/techstar17/server-log-analyzer/actions)
 
 ## Manual checks completed
 
@@ -145,6 +195,8 @@ https://github.com/techstar17/server-log-analyzer/actions
 
 A missing filename was also tested and produced a readable error message.
 
+The Docker container was run with `second_logs.csv` and produced the expected counts. After removing duplicated code, the terminal report appeared once.
+
 ## Project files
 
 | File | Purpose |
@@ -154,7 +206,9 @@ A missing filename was also tested and produced a readable error message.
 | requirements.txt | Pinned Python dependencies |
 | access_logs.csv | First sample dataset |
 | second_logs.csv | Second sample dataset |
-| .gitignore | Excludes the virtual environment and generated files |
+| Dockerfile | Instructions for building the Docker image |
+| .dockerignore | Excludes unnecessary files from the Docker build context |
+| .gitignore | Excludes the virtual environment and generated files from Git |
 | .github/workflows/tests.yml | GitHub Actions test workflow |
 | README.md | Setup and usage instructions |
 
@@ -171,4 +225,4 @@ A missing filename was also tested and produced a readable error message.
 
 - Support for raw web-server logs.
 - Requests and errors grouped by time.
-- Docker packaging.
+- Automated Docker build and run checks in GitHub Actions.
