@@ -1,36 +1,26 @@
 # Server Log Analyzer
 
-A Python command-line tool that reads server request data from a CSV file, calculates error rates, and saves reports and a chart.
+A Python command-line tool that reads server requests from a CSV file and shows how often they returned errors. It reports totals for the whole file and for each hour, then saves a summary, three CSV reports, and a chart.
 
-I built this project to practise Python, log analysis, automated testing, continuous integration, and Docker as part of my DevOps learning.
+I built this project to practise Python, log analysis, automated testing, Docker, and continuous integration as part of my DevOps learning.
 
 ## Features
 
-- Counts total requests.
-- Counts client errors (4xx) and server errors (5xx).
+- Counts total requests, client errors (4xx), and server errors (5xx).
 - Calculates the percentage of requests that returned errors.
 - Counts requests from each IP address.
-- Lists requests that returned errors.
-- Saves a summary, two CSV reports, and a status-code chart.
-- Checks for missing columns, empty datasets, and invalid status codes.
-- Displays a clear error when an input file cannot be read.
-- Includes seven automated tests.
-- Runs Python tests and Docker checks through GitHub Actions on every push and pull request.
+- Lists the requests that returned errors, including their paths and status codes.
+- Groups requests and errors by date and hour.
+- Checks for unreadable files, missing columns, empty datasets, invalid status codes, and invalid timestamps.
 - Runs locally with Python or inside a Docker container.
 
 ## Tools
 
-- Python
-- Pandas
-- Matplotlib
-- unittest
-- Git and GitHub
-- GitHub Actions
-- Docker
+Python, pandas, Matplotlib, unittest, Docker, Git, GitHub, and GitHub Actions.
 
 ## Setup on Windows
 
-Download or clone this repository, then open Command Prompt in the project folder.
+Download or clone this repository and open Command Prompt in the project folder. The project was tested with Python 3.15.
 
 Create and activate a virtual environment:
 
@@ -47,19 +37,17 @@ python -m pip install -r requirements.txt
 
 ## Usage
 
-Run the analyzer with one of the included sample files:
+Run the analyzer with either sample file:
 
 ```bat
 python analyzer.py access_logs.csv
 ```
 
-Or:
-
 ```bat
 python analyzer.py second_logs.csv
 ```
 
-To analyze your own CSV file, provide its path:
+To analyze your own file, pass its path:
 
 ```bat
 python analyzer.py "C:\path\to\your_logs.csv"
@@ -67,54 +55,33 @@ python analyzer.py "C:\path\to\your_logs.csv"
 
 ## Run with Docker on Windows
 
-Start Docker Desktop with Linux containers enabled, then open Command Prompt in the project folder.
-
-The commands below use Windows Command Prompt syntax. Running the Docker image does not require activating the Python virtual environment.
+Start Docker Desktop with Linux containers enabled. Open **Command Prompt** in the project folder. You can run the Docker version without activating the Python virtual environment.
 
 Build the image:
 
 ```bat
-docker build -t server-log-analyzer:1.0 .
+docker build -t server-log-analyzer:1.1 .
 ```
 
-Create the output folder:
+Create the folder for the reports:
 
 ```bat
 if not exist reports mkdir reports
 ```
 
-Run the analyzer with the second sample dataset:
+Run the analyzer:
 
 ```bat
-docker run --rm --mount "type=bind,source=%cd%\second_logs.csv,target=/data/input.csv,readonly" --mount "type=bind,source=%cd%\reports,target=/app/reports" server-log-analyzer:1.0 /data/input.csv
+docker run --rm --mount "type=bind,source=%cd%\second_logs.csv,target=/data/input.csv,readonly" --mount "type=bind,source=%cd%\reports,target=/app/reports" server-log-analyzer:1.1 /data/input.csv
 ```
 
-This command:
+The container reads `second_logs.csv` and writes the reports to the `reports` folder on your computer. The reports remain available after the container exits.
 
-- Mounts `second_logs.csv` as a read-only input file.
-- Saves generated reports in the local `reports` folder.
-- Removes the container after it finishes.
-- Keeps the reports available on your computer.
-
-The sample produces 10 requests, one client error, one server error, and a 20% error rate.
-
-To use the first sample, replace `second_logs.csv` with `access_logs.csv` in the command.
-
-Open the generated reports:
-
-```bat
-start reports
-```
-
-Rebuild the image after changing `analyzer.py`, `requirements.txt`, or the `Dockerfile`:
-
-```bat
-docker build -t server-log-analyzer:1.0 .
-```
+To use `access_logs.csv`, replace `second_logs.csv` in the input mount. Rebuild the image after changing `analyzer.py`, `requirements.txt`, or the `Dockerfile`.
 
 ## Input format
 
-The CSV must contain these columns:
+The CSV must include these four columns:
 
 ```csv
 timestamp,ip,path,status
@@ -122,24 +89,24 @@ timestamp,ip,path,status
 2026-10-31 10:01:00,192.0.2.21,/missing,404
 ```
 
-Status codes must be whole numbers from 100 to 599.
+- `timestamp` must be a valid date and time in `YYYY-MM-DD HH:MM:SS` format. Include leading zeros and use the same timezone throughout the file.
+- `status` must be a whole number from 100 to 599.
 
-The included datasets are made-up examples, not production traffic.
+If a timestamp is invalid, the analyzer stops before writing reports and identifies the affected data row. Data row 1 is the first request after the header.
+
+The included CSV files contain made-up requests for testing.
 
 ## Output
 
-Results appear in the terminal. Files are also saved in the `reports` folder within the current working directory.
-
-When using the Docker command above, `/app/reports` inside the container maps to the local `reports` folder.
+Results appear in the terminal. The analyzer also writes five files to `reports` in the current working directory. Each successful run replaces the previous reports.
 
 | File | Contents |
 |---|---|
-| summary.txt | Input filename, total requests, error counts, and error rate |
-| errors.csv | Requests with 4xx or 5xx status codes |
-| requests_per_ip.csv | Request count for each IP |
-| status_chart.png | Bar chart of requests by status code |
-
-Each run replaces the previous reports.
+| `summary.txt` | Input filename, total requests, client errors, server errors, and overall error rate |
+| `errors.csv` | Input rows with a 4xx or 5xx status code |
+| `requests_per_ip.csv` | Request count for each IP address |
+| `hourly_report.csv` | Request count, client errors, server errors, total errors, and error rate for each hour with traffic |
+| `status_chart.png` | Bar chart showing the number of requests for each HTTP status code |
 
 Open the reports folder on Windows:
 
@@ -147,97 +114,84 @@ Open the reports folder on Windows:
 start reports
 ```
 
+### Reading the hourly report
+
+The analyzer lists hours in date and time order. A request at `10:59:59` belongs to the `10:00:00` hour. A request at `11:00:00` starts the next hour. The same hour on two different dates gets two separate rows. Hours with no requests are omitted.
+
+For `second_logs.csv`, the hourly CSV contains:
+
+```csv
+hour,requests,client_errors,server_errors,total_errors,error_rate_percent
+2026-10-31 10:00:00,10,1,1,2,20.00
+```
+
+During that hour, 2 of the 10 requests returned errors: one client error and one server error. The `20.00` value means 20% of requests in that hour returned an error.
+
 ## Automated tests
 
-With the Python dependencies installed, run all tests from the project folder:
+With the virtual environment active, run the test suite from the project folder:
 
 ```bat
 python -m unittest -v
 ```
 
-The seven tests cover:
+All nine tests passed locally on Windows. They cover:
 
-1. Request counts, error rates, saved CSV reports, and PNG output.
+1. Request totals, error rates, saved CSV reports, and PNG output.
 2. Requests with no errors.
 3. A missing input file.
 4. An empty file.
 5. A CSV containing only column headers.
 6. A missing required column.
-7. Invalid status codes, including text, missing values, decimals, and out-of-range numbers.
+7. Invalid status codes.
+8. Hourly counts, error rates, and chronological order across hours and dates.
+9. Invalid timestamps, including missing values, impossible dates, and incorrect formats.
 
-Tests use temporary folders, so they do not overwrite existing reports.
-
-All seven tests passed locally on Windows.
+The tests use temporary folders so they can check generated files without overwriting your reports.
 
 ## Continuous integration
 
-The workflow in `.github/workflows/tests.yml` runs on GitHub Actions for every push and pull request. It can also be started manually from the Actions tab.
+The [GitHub Actions workflow](.github/workflows/tests.yml) runs on pushes and pull requests. It can also be started manually from the Actions tab.
 
-The workflow contains two jobs.
+1. **Python tests:** A Linux runner sets up Python 3.15, installs the dependencies, and runs all nine tests. The hourly tests check the contents of `hourly_report.csv` and how the analyzer handles invalid timestamps.
+2. **Docker build and report checks:** After the Python tests pass, a second job builds the image and runs it with `second_logs.csv`. It checks the original report headings for duplicate output, verifies the overall counts and error rate, checks the error rows and per-IP counts, and verifies the chart file’s PNG signature.
 
-### Python tests
+Both jobs passed for the hourly reporting update. [View workflow runs](https://github.com/techstar17/server-log-analyzer/actions)
 
-The first job:
+## Manual checks
 
-1. Checks out the repository.
-2. Sets up Python 3.15 on a Linux runner.
-3. Installs dependencies from `requirements.txt`.
-4. Runs the seven automated tests.
-
-### Docker build and report checks
-
-After the Python tests pass, the second job:
-
-1. Checks out the repository.
-2. Builds the Docker image.
-3. Runs the analyzer with `second_logs.csv`.
-4. Checks that each report heading appears exactly once.
-5. Verifies the total requests, error counts, and error rate in the terminal output and saved summary.
-6. Checks the error rows and request counts in the generated CSV files.
-7. Checks that the chart file has a PNG signature.
-
-Both the Python tests and Docker checks passed on GitHub Actions.
-
-The Docker job builds and tests the image; it does not publish it to a container registry.
-
-[View workflow runs](https://github.com/techstar17/server-log-analyzer/actions)
-
-## Manual checks completed
-
-| Input | Requests | Client errors | Server errors | Error rate |
+| Input | Requests | Client errors | Server errors | Overall error rate |
 |---|---:|---:|---:|---:|
-| access_logs.csv | 8 | 2 | 2 | 50% |
-| second_logs.csv | 10 | 1 | 1 | 20% |
+| `access_logs.csv` | 8 | 2 | 2 | 50% |
+| `second_logs.csv` | 10 | 1 | 1 | 20% |
 
-A missing filename was also tested and produced a readable error message.
-
-The Docker container was run locally with `second_logs.csv` and produced the expected counts. After removing duplicated code, the terminal report appeared once.
+Running the analyzer with a missing filename produced a readable error message. Running `second_logs.csv` produced one hourly row because all ten sample requests occurred within the same hour.
 
 ## Project files
 
 | File | Purpose |
 |---|---|
-| analyzer.py | Reads the CSV, checks input, and generates reports |
-| test_analyzer.py | Automated tests |
-| requirements.txt | Pinned Python dependencies |
-| access_logs.csv | First sample dataset |
-| second_logs.csv | Second sample dataset |
-| Dockerfile | Instructions for building the Docker image |
-| .dockerignore | Excludes unnecessary files from the Docker build context |
-| .gitignore | Excludes the virtual environment and generated files from Git |
-| .github/workflows/tests.yml | Python tests and Docker checks on GitHub Actions |
-| README.md | Setup and usage instructions |
+| `analyzer.py` | Reads and validates the input, calculates results, and saves reports |
+| `test_analyzer.py` | Tests request counts, report files, status codes, and input errors |
+| `test_hourly.py` | Tests hourly grouping, error rates, and timestamp validation |
+| `requirements.txt` | Lists the pinned Python dependencies |
+| `access_logs.csv` | Sample dataset with eight requests |
+| `second_logs.csv` | Sample dataset with ten requests |
+| `Dockerfile` | Builds the analyzer image |
+| `.dockerignore` | Excludes unnecessary files from the Docker build |
+| `.gitignore` | Excludes the virtual environment and generated reports from Git |
+| `.github/workflows/tests.yml` | Runs the Python tests and Docker checks on GitHub Actions |
+| `README.md` | Explains setup, usage, reports, and tests |
 
 ## Current limits
 
-- Accepts the CSV format above; does not parse raw Nginx or Apache logs.
+- Accepts CSV input in the format shown above. Raw Nginx and Apache logs need to be converted first.
 - Reads the full dataset into memory.
-- Requires the timestamp column but does not validate or analyze timestamps.
-- Does not validate IP addresses or detect attacks.
-- Runs on demand rather than monitoring traffic continuously.
-- Overwrites previous reports on each run.
+- Expects timestamps in one timezone and does not convert between timezones.
+- Counts requests by the supplied IP value without validating IP addresses.
+- Runs on demand and does not monitor live traffic or detect attacks.
+- Replaces earlier reports when run from the same working directory.
 
-## Planned improvements
+## Planned improvement
 
-- Support for raw web-server logs.
-- Requests and errors grouped by time.
+- Add support for raw web-server logs.
