@@ -10,6 +10,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN python -m pip install --no-cache-dir -r requirements.txt
 
-COPY analyzer.py .
+COPY analyzer.py nginx_reader.py ./
 
 ENTRYPOINT ["python", "/app/analyzer.py"]
