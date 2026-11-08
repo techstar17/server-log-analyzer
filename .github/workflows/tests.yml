@@ -46,33 +46,34 @@ jobs:
       - name: Build Docker image
         run: docker build -t server-log-analyzer:ci .
 
-      - name: Run analyzer inside Docker
+      - name: Run CSV sample inside Docker
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p reports
+          mkdir -p reports/csv
 
           docker run --rm \
             --mount "type=bind,source=${GITHUB_WORKSPACE}/second_logs.csv,target=/data/input.csv,readonly" \
-            --mount "type=bind,source=${GITHUB_WORKSPACE}/reports,target=/app/reports" \
+            --mount "type=bind,source=${GITHUB_WORKSPACE}/reports/csv,target=/app/reports" \
             server-log-analyzer:ci /data/input.csv \
-            | tee docker-output.txt
+            | tee csv-output.txt
 
-      - name: Check Docker output and saved reports
+      - name: Check CSV output and saved reports
         shell: bash
         run: |
           python3 - <<'PY'
           import csv
           from pathlib import Path
 
-          reports = Path("reports")
-          output = Path("docker-output.txt").read_text(encoding="utf-8")
+          reports = Path("reports/csv")
+          output = Path("csv-output.txt").read_text(encoding="utf-8")
           summary = (reports / "summary.txt").read_text(encoding="utf-8")
 
           for heading in (
               "SERVER LOG REPORT",
               "Requests per IP:",
               "Requests that returned errors:",
+              "Hourly report:",
               "Reports saved in:",
           ):
               assert output.count(heading) == 1, (
@@ -85,40 +86,89 @@ jobs:
               "Server errors (5xx): 1",
               "Error rate: 20.0%",
           ):
-              assert expected in output, f"Missing terminal result: {expected}"
-              assert expected in summary, f"Missing summary result: {expected}"
+              assert expected in output.splitlines(), f"Missing terminal line: {expected}"
+              assert expected in summary.splitlines(), f"Missing summary line: {expected}"
 
-          with (reports / "errors.csv").open(
-              encoding="utf-8", newline=""
-          ) as file:
-              errors = list(csv.DictReader(file))
+          def read_rows(filename):
+              with (reports / filename).open(encoding="utf-8", newline="") as file:
+                  return list(csv.DictReader(file))
 
-          assert len(errors) == 2, "Expected two error rows"
-          assert {
-              (row["path"], row["status"]) for row in errors
-          } == {
-              ("/missing", "404"),
+          errors = read_rows("errors.csv")
+          assert sorted((row["path"], row["status"]) for row in errors) == [
               ("/api/orders", "500"),
-          }, "Unexpected error rows"
+              ("/missing", "404"),
+          ], errors
 
-          with (reports / "requests_per_ip.csv").open(
-              encoding="utf-8", newline=""
-          ) as file:
-              counts = {
-                  row["ip"]: int(row["requests"])
-                  for row in csv.DictReader(file)
-              }
+          counts = read_rows("requests_per_ip.csv")
+          assert sorted((row["ip"], int(row["requests"])) for row in counts) == [
+              ("192.0.2.20", 4),
+              ("192.0.2.21", 3),
+              ("192.0.2.22", 3),
+          ], counts
 
-          assert counts == {
-              "192.0.2.20": 4,
-              "192.0.2.21": 3,
-              "192.0.2.22": 3,
-          }, "Unexpected request counts"
+          hourly = read_rows("hourly_report.csv")
+          assert len(hourly) == 1, hourly
+          row = hourly[0]
+          assert row["hour"] == "2026-10-31 10:00:00", row
+          assert (
+              int(row["requests"]),
+              int(row["client_errors"]),
+              int(row["server_errors"]),
+              int(row["total_errors"]),
+              float(row["error_rate_percent"]),
+          ) == (10, 1, 1, 2, 20.0), row
 
           chart = (reports / "status_chart.png").read_bytes()
-          assert chart.startswith(b"\x89PNG\r\n\x1a\n"), (
-              "Chart does not have a PNG signature"
-          )
+          assert chart.startswith(b"\x89PNG\r\n\x1a\n"), "Invalid CSV chart"
+          print("CSV sample passed all report checks.")
+          PY
 
-          print("Docker output and all four reports passed checks.")
+      - name: Run Nginx sample inside Docker
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p reports/nginx
+
+          docker run --rm \
+            --mount "type=bind,source=${GITHUB_WORKSPACE}/sample_nginx.log,target=/data/input.log,readonly" \
+            --mount "type=bind,source=${GITHUB_WORKSPACE}/reports/nginx,target=/app/reports" \
+            server-log-analyzer:ci /data/input.log
+
+      - name: Check Nginx summary and UTC hourly report
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import csv
+          from pathlib import Path
+
+          reports = Path("reports/nginx")
+          summary = (reports / "summary.txt").read_text(encoding="utf-8").splitlines()
+
+          for expected in (
+              "Total requests: 3",
+              "Client errors (4xx): 1",
+              "Server errors (5xx): 1",
+              "Error rate: 66.7%",
+          ):
+              assert expected in summary, f"Missing Nginx summary line: {expected}"
+
+          with (reports / "hourly_report.csv").open(encoding="utf-8", newline="") as file:
+              actual = [
+                  (
+                      row["hour"],
+                      int(row["requests"]),
+                      int(row["client_errors"]),
+                      int(row["server_errors"]),
+                      int(row["total_errors"]),
+                      float(row["error_rate_percent"]),
+                  )
+                  for row in csv.DictReader(file)
+              ]
+
+          expected_hours = [
+              ("2026-10-31 09:00:00", 1, 0, 0, 0, 0.0),
+              ("2026-10-31 10:00:00", 2, 1, 1, 2, 100.0),
+          ]
+          assert actual == expected_hours, f"Unexpected UTC hourly report: {actual}"
+          print("Nginx container passed. Both UTC hours match the expected report.")
           PY
