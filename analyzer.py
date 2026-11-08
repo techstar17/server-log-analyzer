@@ -1,4 +1,6 @@
 import argparse
+from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -42,7 +44,32 @@ if not valid_status.all():
 
 logs["status"] = logs["status"].astype(int)
 
-# Calculate the results.
+# Validate timestamps before generating any reports.
+timestamp_format = "%Y-%m-%d %H:%M:%S"
+parsed_timestamps = []
+
+for row_number, value in enumerate(logs["timestamp"], start=1):
+    try:
+        if not isinstance(value, str):
+            raise ValueError("Missing timestamp")
+
+        timestamp = datetime.strptime(value, timestamp_format)
+
+        # Require the exact format, including leading zeros.
+        if timestamp.strftime(timestamp_format) != value:
+            raise ValueError("Incorrect timestamp format")
+
+    except ValueError:
+        parser.exit(
+            1,
+            f"Invalid timestamp in data row {row_number}. "
+            "Use YYYY-MM-DD HH:MM:SS, for example "
+            "2026-10-31 10:00:00.\n",
+        )
+
+    parsed_timestamps.append(timestamp)
+
+# Calculate the overall results.
 total = len(logs)
 client_errors = logs["status"].between(400, 499).sum()
 server_errors = logs["status"].between(500, 599).sum()
@@ -51,6 +78,47 @@ error_rate = (client_errors + server_errors) / total
 errors = logs[logs["status"] >= 400]
 requests_per_ip = logs["ip"].value_counts()
 status_counts = logs["status"].value_counts().sort_index()
+
+# Group requests by date and hour.
+# Only hours containing requests are included.
+hourly_counts = defaultdict(
+    lambda: {
+        "requests": 0,
+        "client_errors": 0,
+        "server_errors": 0,
+    }
+)
+
+for timestamp, status in zip(parsed_timestamps, logs["status"]):
+    hour = timestamp.replace(minute=0, second=0, microsecond=0)
+    counts = hourly_counts[hour]
+
+    counts["requests"] += 1
+
+    if 400 <= status <= 499:
+        counts["client_errors"] += 1
+    elif 500 <= status <= 599:
+        counts["server_errors"] += 1
+
+hourly_rows = []
+
+for hour, counts in sorted(hourly_counts.items()):
+    total_errors = counts["client_errors"] + counts["server_errors"]
+
+    hourly_rows.append(
+        {
+            "hour": hour.strftime(timestamp_format),
+            "requests": counts["requests"],
+            "client_errors": counts["client_errors"],
+            "server_errors": counts["server_errors"],
+            "total_errors": total_errors,
+            "error_rate_percent": (
+                total_errors / counts["requests"] * 100
+            ),
+        }
+    )
+
+hourly_report = pd.DataFrame(hourly_rows)
 
 summary = (
     "SERVER LOG REPORT\n"
@@ -73,6 +141,16 @@ if errors.empty:
 else:
     print(errors[["path", "status"]].to_string(index=False))
 
+print("\nHourly report:")
+print(
+    hourly_report.to_string(
+        index=False,
+        formatters={
+            "error_rate_percent": lambda value: f"{value:.1f}%"
+        },
+    )
+)
+
 # Save reports and the chart.
 report_dir = Path("reports")
 
@@ -84,23 +162,46 @@ try:
         encoding="utf-8",
     )
 
-    errors.to_csv(report_dir / "errors.csv", index=False)
+    errors.to_csv(
+        report_dir / "errors.csv",
+        index=False,
+    )
 
     requests_per_ip.rename_axis("ip").reset_index(
         name="requests"
-    ).to_csv(report_dir / "requests_per_ip.csv", index=False)
+    ).to_csv(
+        report_dir / "requests_per_ip.csv",
+        index=False,
+    )
+
+    # Store percentages as numbers, for example 20.00 means 20%.
+    hourly_report.to_csv(
+        report_dir / "hourly_report.csv",
+        index=False,
+        float_format="%.2f",
+    )
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    status_counts.plot(kind="bar", color="steelblue", ax=ax)
 
-    ax.set_title("Requests by HTTP Status")
-    ax.set_xlabel("HTTP status code")
-    ax.set_ylabel("Number of requests")
-    ax.tick_params(axis="x", labelrotation=0)
+    try:
+        status_counts.plot(
+            kind="bar",
+            color="steelblue",
+            ax=ax,
+        )
 
-    fig.tight_layout()
-    fig.savefig(report_dir / "status_chart.png", dpi=150)
-    plt.close(fig)
+        ax.set_title("Requests by HTTP Status")
+        ax.set_xlabel("HTTP status code")
+        ax.set_ylabel("Number of requests")
+        ax.tick_params(axis="x", labelrotation=0)
+
+        fig.tight_layout()
+        fig.savefig(
+            report_dir / "status_chart.png",
+            dpi=150,
+        )
+    finally:
+        plt.close(fig)
 
 except OSError as error:
     parser.exit(1, f"Could not save all reports: {error}\n")
@@ -109,4 +210,5 @@ print(f"\nReports saved in: {report_dir.resolve()}")
 print("  summary.txt")
 print("  errors.csv")
 print("  requests_per_ip.csv")
+print("  hourly_report.csv")
 print("  status_chart.png")
