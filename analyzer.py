@@ -6,20 +6,30 @@ from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
 
+from nginx_reader import read_nginx_log
+
 
 parser = argparse.ArgumentParser(
-    description="Analyze a CSV server log and save reports."
+    description="Analyze a CSV file or an Nginx combined access log."
 )
-parser.add_argument("file", type=Path, help="Path to the CSV log file")
+parser.add_argument(
+    "file",
+    type=Path,
+    help="Path to a CSV file or an Nginx .log file",
+)
 args = parser.parse_args()
 
-# Read the CSV file.
+# Nginx timestamps are converted to UTC by read_nginx_log.
+# CSV timestamps stay in the timezone used in the input file.
 try:
-    logs = pd.read_csv(args.file)
+    if args.file.suffix.lower() == ".log":
+        logs = read_nginx_log(args.file)
+    else:
+        logs = pd.read_csv(args.file)
 except (OSError, ValueError, pd.errors.ParserError) as error:
     parser.exit(1, f"Could not read the log file: {error}\n")
 
-# Validate the required columns.
+# Check the required columns.
 required_columns = {"timestamp", "ip", "path", "status"}
 missing = required_columns - set(logs.columns)
 
@@ -29,7 +39,7 @@ if missing:
 if logs.empty:
     parser.exit(1, "The log file has no requests.\n")
 
-# Validate HTTP status codes.
+# Check that every HTTP status is a whole number from 100 to 599.
 logs["status"] = pd.to_numeric(logs["status"], errors="coerce")
 valid_status = (
     logs["status"].between(100, 599)
@@ -37,14 +47,11 @@ valid_status = (
 )
 
 if not valid_status.all():
-    parser.exit(
-        1,
-        "Every status must be a whole number from 100 to 599.\n",
-    )
+    parser.exit(1, "Every status must be a whole number from 100 to 599.\n")
 
 logs["status"] = logs["status"].astype(int)
 
-# Validate timestamps before generating any reports.
+# Validate timestamps before writing reports.
 timestamp_format = "%Y-%m-%d %H:%M:%S"
 parsed_timestamps = []
 
@@ -55,7 +62,6 @@ for row_number, value in enumerate(logs["timestamp"], start=1):
 
         timestamp = datetime.strptime(value, timestamp_format)
 
-        # Require the exact format, including leading zeros.
         if timestamp.strftime(timestamp_format) != value:
             raise ValueError("Incorrect timestamp format")
 
@@ -79,8 +85,7 @@ errors = logs[logs["status"] >= 400]
 requests_per_ip = logs["ip"].value_counts()
 status_counts = logs["status"].value_counts().sort_index()
 
-# Group requests by date and hour.
-# Only hours containing requests are included.
+# Count requests and errors for each date and hour.
 hourly_counts = defaultdict(
     lambda: {
         "requests": 0,
@@ -92,7 +97,6 @@ hourly_counts = defaultdict(
 for timestamp, status in zip(parsed_timestamps, logs["status"]):
     hour = timestamp.replace(minute=0, second=0, microsecond=0)
     counts = hourly_counts[hour]
-
     counts["requests"] += 1
 
     if 400 <= status <= 499:
@@ -112,14 +116,13 @@ for hour, counts in sorted(hourly_counts.items()):
             "client_errors": counts["client_errors"],
             "server_errors": counts["server_errors"],
             "total_errors": total_errors,
-            "error_rate_percent": (
-                total_errors / counts["requests"] * 100
-            ),
+            "error_rate_percent": total_errors / counts["requests"] * 100,
         }
     )
 
 hourly_report = pd.DataFrame(hourly_rows)
 
+# Display the results.
 summary = (
     "SERVER LOG REPORT\n"
     f"File: {args.file}\n"
@@ -129,7 +132,6 @@ summary = (
     f"Error rate: {error_rate:.1%}\n"
 )
 
-# Display each section once.
 print("\n" + summary)
 
 print("Requests per IP:")
@@ -145,36 +147,23 @@ print("\nHourly report:")
 print(
     hourly_report.to_string(
         index=False,
-        formatters={
-            "error_rate_percent": lambda value: f"{value:.1f}%"
-        },
+        formatters={"error_rate_percent": lambda value: f"{value:.1f}%"},
     )
 )
 
-# Save reports and the chart.
+# Save the five reports.
 report_dir = Path("reports")
 
 try:
     report_dir.mkdir(exist_ok=True)
 
-    (report_dir / "summary.txt").write_text(
-        summary,
-        encoding="utf-8",
-    )
-
-    errors.to_csv(
-        report_dir / "errors.csv",
-        index=False,
-    )
+    (report_dir / "summary.txt").write_text(summary, encoding="utf-8")
+    errors.to_csv(report_dir / "errors.csv", index=False)
 
     requests_per_ip.rename_axis("ip").reset_index(
         name="requests"
-    ).to_csv(
-        report_dir / "requests_per_ip.csv",
-        index=False,
-    )
+    ).to_csv(report_dir / "requests_per_ip.csv", index=False)
 
-    # Store percentages as numbers, for example 20.00 means 20%.
     hourly_report.to_csv(
         report_dir / "hourly_report.csv",
         index=False,
@@ -182,24 +171,14 @@ try:
     )
 
     fig, ax = plt.subplots(figsize=(8, 5))
-
     try:
-        status_counts.plot(
-            kind="bar",
-            color="steelblue",
-            ax=ax,
-        )
-
+        status_counts.plot(kind="bar", color="steelblue", ax=ax)
         ax.set_title("Requests by HTTP Status")
         ax.set_xlabel("HTTP status code")
         ax.set_ylabel("Number of requests")
         ax.tick_params(axis="x", labelrotation=0)
-
         fig.tight_layout()
-        fig.savefig(
-            report_dir / "status_chart.png",
-            dpi=150,
-        )
+        fig.savefig(report_dir / "status_chart.png", dpi=150)
     finally:
         plt.close(fig)
 
